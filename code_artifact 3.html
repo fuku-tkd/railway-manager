@@ -1,0 +1,2113 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>路線管理 ＆ 種別案内図マネージャー</title>
+
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- Leaflet CSS & JS (OpenStreetMap) -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- FontAwesome for Icons -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+<style>
+    body, html {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        width: 100%;
+        overflow: hidden;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    }
+
+    /* カスタムスクロールバー */
+    ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+        background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: #334155;
+        border-radius: 3px;
+    }
+
+    /* 地図コンテナ */
+    #map {
+        width: 100%;
+        height: 100%;
+        z-index: 1;
+    }
+
+    /* 縦書き駅名（自然な文字の向き） */
+    .writing-mode-vertical {
+        writing-mode: vertical-rl;
+        text-orientation: upright;
+        letter-spacing: 0.05em;
+    }
+
+    /* Leaflet ポップアップのダークモード対応カスタマイズ */
+    .leaflet-popup-content-wrapper {
+        background: #0f172a !important;
+        color: #f8fafc !important;
+        border: 1px solid #334155 !important;
+        border-radius: 12px !important;
+        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5) !important;
+        padding: 4px !important;
+    }
+    .leaflet-popup-tip {
+        background: #0f172a !important;
+        border: 1px solid #334155 !important;
+    }
+    .leaflet-popup-content {
+        margin: 8px 10px !important;
+        line-height: 1.4 !important;
+    }
+</style>
+
+</head>
+<body class="bg-slate-950 text-slate-100 h-screen w-screen flex flex-col overflow-hidden">
+
+<!-- 画面上部 HUD / ナビゲーションバー -->
+<div class="fixed top-3 left-3 right-3 z-[1000] pointer-events-none flex items-center justify-between">
+    <!-- 左上: 現在の路線情報 & クイックアクション -->
+    <div class="pointer-events-auto bg-slate-900/90 backdrop-blur-md px-3.5 py-2 rounded-2xl border border-slate-700/80 shadow-2xl flex items-center space-x-3">
+        <div id="activeLineIndicator" class="w-3.5 h-3.5 rounded-full border border-white/50 shadow-sm shrink-0 bg-blue-500"></div>
+        <div class="flex flex-col">
+            <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">編集中の路線</span>
+            <span id="activeLineName" class="font-extrabold text-xs text-slate-100">路線未選択</span>
+            <span id="activeLineStats" class="text-[10px] text-slate-400">0 駅 / 0.00 km</span>
+        </div>
+        <button id="quickAddLineBtn" class="ml-2 bg-blue-600 hover:bg-blue-500 text-white text-xs px-2.5 py-1 rounded-lg font-semibold shadow transition-all flex items-center space-x-1">
+            <i class="fa-solid fa-plus text-[10px]"></i>
+            <span class="hidden sm:inline">新規路線</span>
+        </button>
+    </div>
+
+    <!-- 右上: メニューボタン & ドロップダウン -->
+    <div class="pointer-events-auto relative">
+        <button id="hamburgerBtn" class="bg-slate-900/90 hover:bg-slate-800 text-white w-10 h-10 rounded-xl border border-slate-700/80 shadow-2xl flex items-center justify-center transition-all focus:outline-none">
+            <i class="fa-solid fa-bars text-base"></i>
+        </button>
+
+        <!-- メニューモーダル / ポップオーバー -->
+        <div id="menuDropdown" class="hidden absolute right-0 mt-2 w-56 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl py-1 z-[1001]">
+            <button id="menuNavMap" class="w-full text-left px-4 py-2.5 text-xs font-semibold text-blue-400 hover:bg-slate-800 flex items-center space-x-2">
+                <i class="fa-solid fa-map"></i>
+                <span>マップ（全画面）</span>
+            </button>
+            <button id="menuNavDashboard" class="w-full text-left px-4 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-800 flex items-center space-x-2">
+                <i class="fa-solid fa-sliders"></i>
+                <span>路線マネージャー</span>
+            </button>
+            <button id="menuNavDiagram" class="w-full text-left px-4 py-2.5 text-xs font-semibold text-blue-400 hover:bg-slate-800 flex items-center space-x-2 border-t border-slate-800">
+                <i class="fa-solid fa-diagram-project"></i>
+                <span>種別案内図マネージャー</span>
+            </button>
+            <button id="menuNavExport" class="w-full text-left px-4 py-2.5 text-xs font-semibold text-emerald-400 hover:bg-slate-800 flex items-center space-x-2 border-t border-slate-800">
+                <i class="fa-solid fa-file-code"></i>
+                <span>データ保存・読込 (JSON)</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- メイン領域: マップ表示エリア -->
+<main id="mapContainer" class="flex-1 h-full w-full relative">
+    <div id="map"></div>
+</main>
+
+<!-- 右側: 路線マネージャー パネル -->
+<aside id="dashboardPanel" class="hidden fixed inset-y-0 right-0 z-[2000] w-full md:w-96 bg-slate-900 border-l border-slate-800 flex flex-col h-full shadow-2xl overflow-y-auto">
+    
+    <!-- ダッシュボードヘッダー -->
+    <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/70 sticky top-0 z-10 backdrop-blur-md">
+        <div class="flex items-center space-x-2">
+            <i class="fa-solid fa-train text-blue-400 text-base"></i>
+            <h2 class="font-bold text-sm text-slate-100">路線マネージャー</h2>
+        </div>
+        <button id="closeDashboardBtn" class="text-slate-400 hover:text-white p-1">
+            <i class="fa-solid fa-xmark text-lg"></i>
+        </button>
+    </div>
+
+    <!-- 現在選択中の路線強調バナー -->
+    <div class="bg-slate-950 px-4 py-2.5 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+            <span class="text-[10px] text-slate-400 font-bold uppercase">対象路線:</span>
+            <div id="panelActiveLineColor" class="w-3 h-3 rounded-full bg-slate-600 shrink-0"></div>
+            <span id="panelActiveLineName" class="font-bold text-xs text-slate-200">未選択</span>
+        </div>
+        <span id="panelActiveLineBadge" class="text-[10px] px-2 py-0.5 rounded font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">未選択</span>
+    </div>
+
+    <!-- タブナビゲーション -->
+    <div class="flex border-b border-slate-800 bg-slate-950/30 text-xs font-semibold sticky top-[57px] z-10 backdrop-blur-md">
+        <button id="tabLinesBtn" class="flex-1 py-3 text-center border-b-2 border-blue-500 text-blue-400 transition-colors flex items-center justify-center space-x-1 shrink-0">
+            <i class="fa-solid fa-list-check"></i>
+            <span>路線一覧</span>
+        </button>
+        <button id="tabEditBtn" class="flex-1 py-3 text-center border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition-colors flex items-center justify-center space-x-1 shrink-0">
+            <i class="fa-solid fa-sliders"></i>
+            <span>路線設定</span>
+        </button>
+        <button id="tabStationsBtn" class="flex-1 py-3 text-center border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition-colors flex items-center justify-center space-x-1 shrink-0">
+            <i class="fa-solid fa-location-dot"></i>
+            <span>駅・信号場一覧</span>
+        </button>
+    </div>
+
+    <!-- タブコンテンツエリア（スクロール可能） -->
+    <div class="flex-1 p-4 space-y-4 pb-20">
+
+        <!-- TAB 1: 路線一覧 -->
+        <div id="tabContentLines" class="space-y-3">
+            <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">登録路線一覧</span>
+                <button id="btnCreateLine" class="bg-blue-600 hover:bg-blue-500 text-white text-xs px-3 py-1.5 rounded-lg font-semibold flex items-center space-x-1 shadow transition-all">
+                    <i class="fa-solid fa-plus"></i>
+                    <span>新規路線追加</span>
+                </button>
+            </div>
+            <div id="linesListContainer" class="space-y-2">
+                <!-- 動的描画 -->
+            </div>
+        </div>
+
+        <!-- TAB 2: 路線・デザイン設定 -->
+        <div id="tabContentEdit" class="hidden space-y-4">
+            <div id="noLineSelectedNotice" class="text-xs text-amber-400 bg-amber-950/40 p-3 rounded-lg border border-amber-800/50 flex items-center space-x-2">
+                <i class="fa-solid fa-circle-exclamation text-base"></i>
+                <span>設定する路線が選択されていません。路線一覧から選択してください。</span>
+            </div>
+
+            <div id="lineSettingsForm" class="space-y-4 hidden">
+                <!-- 基本設定 -->
+                <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-3">
+                    <span class="text-xs font-bold text-slate-300 block border-b border-slate-800 pb-2">路線基本設定</span>
+                    
+                    <!-- ロック機能スイッチ -->
+                    <div class="flex items-center justify-between bg-slate-900/80 p-2.5 rounded-lg border border-slate-700/60">
+                        <div class="flex items-center space-x-2">
+                            <i id="iconLineLock" class="fa-solid fa-lock-open text-slate-400 text-xs"></i>
+                            <div>
+                                <span class="text-xs font-bold text-slate-200 block">路線の位置ロック</span>
+                                <span class="text-[10px] text-slate-400 block">ロック時は点(◻︎)を非表示にし位置変更を固定</span>
+                            </div>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="chkLockLine" class="sr-only peer">
+                            <div class="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
+                        </label>
+                    </div>
+
+                    <div>
+                        <label class="text-[11px] text-slate-400 font-semibold block mb-1">見出し / グループ名（任意）</label>
+                        <input type="text" id="inputLineCategory" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-blue-500" placeholder="例: 本線系統、○○エリア、主要路線">
+                    </div>
+
+                    <div>
+                        <label class="text-[11px] text-slate-400 font-semibold block mb-1">路線名</label>
+                        <input type="text" id="inputLineName" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label class="text-[11px] text-slate-400 font-semibold block mb-1">路線カラー</label>
+                        <div class="flex items-center space-x-2">
+                            <input type="color" id="inputLineColor" class="w-8 h-8 rounded border-0 bg-transparent cursor-pointer">
+                            <span id="lblLineColorHex" class="font-mono text-xs text-slate-400">#3b82f6</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 線デザイン -->
+                <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-3">
+                    <span class="text-xs font-bold text-slate-300 block border-b border-slate-800 pb-2">線スタイル</span>
+                    <div>
+                        <label class="text-[11px] text-slate-400 font-semibold block mb-1">線の種類</label>
+                        <select id="selectLineStyle" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-blue-500">
+                            <option value="solid">実線 (Solid)</option>
+                            <option value="dashed">破線 (Dashed)</option>
+                            <option value="dotted">点線 (Dotted)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-[11px] text-slate-400 font-semibold mb-1">
+                            <span>線の太さ</span>
+                            <span id="lblLineWidth">5px</span>
+                        </div>
+                        <input type="range" id="rangeLineWidth" min="1" max="15" value="5" class="w-full accent-blue-500">
+                    </div>
+                </div>
+
+                <!-- シンボル・アイコンデザイン -->
+                <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-3">
+                    <span class="text-xs font-bold text-slate-300 block border-b border-slate-800 pb-2">駅・信号場・点のシンボル</span>
+                    <p class="text-[10px] text-slate-400">※駅・信号場は縁色が路線カラー、点は黒枠白塗りの小さな四角になります。</p>
+
+                    <!-- 駅 (丸) -->
+                    <div class="space-y-2 pt-1">
+                        <span class="text-[11px] font-bold text-slate-400 flex items-center space-x-1">
+                            <i class="fa-regular fa-circle text-xs"></i>
+                            <span>駅（丸 ○）</span>
+                        </span>
+                        <div>
+                            <div class="flex justify-between text-[10px] text-slate-400 mb-1">
+                                <span>本体サイズ</span>
+                                <span id="lblStationSize">16px</span>
+                            </div>
+                            <input type="range" id="rangeStationSize" min="10" max="32" value="16" class="w-full accent-blue-500">
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-[10px] text-slate-400 mb-1">
+                                <span>縁の太さ</span>
+                                <span id="lblStationBorder">3px</span>
+                            </div>
+                            <input type="range" id="rangeStationBorder" min="1" max="8" value="3" class="w-full accent-blue-500">
+                        </div>
+                    </div>
+
+                    <!-- 信号場 (三角) -->
+                    <div class="space-y-2 pt-2 border-t border-slate-800/60">
+                        <span class="text-[11px] font-bold text-slate-400 flex items-center space-x-1">
+                            <i class="fa-solid fa-play -rotate-90 text-[10px]"></i>
+                            <span>信号場（三角 △）</span>
+                        </span>
+                        <div>
+                            <div class="flex justify-between text-[10px] text-slate-400 mb-1">
+                                <span>本体サイズ</span>
+                                <span id="lblSignalSize">18px</span>
+                            </div>
+                            <input type="range" id="rangeSignalSize" min="10" max="32" value="18" class="w-full accent-blue-500">
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-[10px] text-slate-400 mb-1">
+                                <span>縁の太さ</span>
+                                <span id="lblSignalBorder">2px</span>
+                            </div>
+                            <input type="range" id="rangeSignalBorder" min="1" max="8" value="2" class="w-full accent-blue-500">
+                        </div>
+                    </div>
+
+                    <!-- 点 (小さな四角) -->
+                    <div class="space-y-2 pt-2 border-t border-slate-800/60">
+                        <span class="text-[11px] font-bold text-slate-400 flex items-center space-x-1">
+                            <i class="fa-regular fa-square text-xs"></i>
+                            <span>点（小さな四角 ◻︎）</span>
+                        </span>
+                        <div>
+                            <div class="flex justify-between text-[10px] text-slate-400 mb-1">
+                                <span>本体サイズ</span>
+                                <span id="lblPointSize">8px</span>
+                            </div>
+                            <input type="range" id="rangePointSize" min="4" max="16" value="8" class="w-full accent-blue-500">
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-[10px] text-slate-400 mb-1">
+                                <span>縁の太さ</span>
+                                <span id="lblPointBorder">1.5px</span>
+                            </div>
+                            <input type="range" id="rangePointBorder" min="1" max="4" value="1.5" step="0.5" class="w-full accent-blue-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 削除ボタン -->
+                <button id="btnDeleteCurrentLine" class="w-full bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 font-semibold text-xs py-2.5 rounded-xl transition-all flex items-center justify-center space-x-1">
+                    <i class="fa-solid fa-trash-can"></i>
+                    <span>この路線を削除</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- TAB 3: 駅・信号場一覧 -->
+        <div id="tabContentStations" class="hidden space-y-3">
+            <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">選択中路線の駅・信号場一覧</span>
+            </div>
+            <p class="text-[10px] text-slate-400">※「点 (◻︎)」はリストから除外され、駅・信号場のみ表示されます。</p>
+            <div id="stationsListContainer" class="space-y-2">
+                <!-- 動的描画 -->
+            </div>
+        </div>
+
+    </div>
+</aside>
+
+<!-- 完全分離：独立「種別案内図マネージャー」専用パネル（全画面モーダル / 全体スクロール） -->
+<aside id="diagramPanel" class="hidden fixed inset-0 z-[2500] bg-slate-950 flex flex-col h-full w-full shadow-2xl overflow-y-auto">
+    <!-- パネルヘッダー (画面上部に固定) -->
+    <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/90 sticky top-0 z-20 backdrop-blur-md">
+        <div class="flex items-center space-x-3">
+            <i class="fa-solid fa-diagram-project text-blue-400 text-lg"></i>
+            <div>
+                <h2 class="font-bold text-sm text-slate-100">種別案内図マネージャー</h2>
+                <div class="flex items-center space-x-2 mt-0.5">
+                    <span class="text-[10px] text-slate-400">対象路線:</span>
+                    <span id="diagramActiveLineBadge" class="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-600 text-white flex items-center space-x-1">
+                        <span id="diagramActiveLineDot" class="w-2 h-2 rounded-full bg-white"></span>
+                        <span id="diagramActiveLineName">路線未選択</span>
+                    </span>
+                </div>
+            </div>
+        </div>
+        <button id="closeDiagramPanelBtn" class="text-slate-400 hover:text-white p-2 bg-slate-800 hover:bg-slate-700 rounded-xl transition-all flex items-center space-x-1 text-xs font-semibold">
+            <i class="fa-solid fa-xmark text-base"></i>
+            <span>閉じる</span>
+        </button>
+    </div>
+
+    <!-- 種別マネージャーメインコンテンツ (全体が自然にスクロール) -->
+    <div class="flex-1 flex flex-col lg:flex-row p-4 lg:p-6 gap-6 min-h-max">
+        
+        <!-- 左側 コントロールエリア -->
+        <div class="w-full lg:w-96 space-y-4 shrink-0">
+            <div id="noLineSelectedNoticeDiagram" class="text-xs text-amber-400 bg-amber-950/40 p-3 rounded-lg border border-amber-800/50 flex items-center space-x-2">
+                <i class="fa-solid fa-circle-exclamation text-base"></i>
+                <span>路線が選択されていません。路線マネージャーで路線を選択してください。</span>
+            </div>
+
+            <div id="diagramManagerBody" class="space-y-4 hidden bg-slate-900 p-4 rounded-2xl border border-slate-800 shadow-xl">
+                <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <span class="text-xs font-bold text-slate-200 uppercase tracking-wider">列車種別一覧</span>
+                    <button id="btnAddServiceType" class="bg-blue-600 hover:bg-blue-500 text-white text-xs px-3 py-1.5 rounded-lg font-semibold flex items-center space-x-1 shadow transition-all">
+                        <i class="fa-solid fa-plus"></i>
+                        <span>種別を追加</span>
+                    </button>
+                </div>
+
+                <div id="serviceTypesListContainer" class="space-y-2.5">
+                    <!-- 動的描画 -->
+                </div>
+            </div>
+        </div>
+
+        <!-- 右側 プレビュー表示エリア (スクロールは行わず高さが自動調整される) -->
+        <div class="flex-1 flex flex-col space-y-3 min-w-0">
+            <span class="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center space-x-2">
+                <i class="fa-solid fa-eye text-blue-400"></i>
+                <span>種別案内図 プレビュー</span>
+            </span>
+            <div class="w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl overflow-x-auto">
+                <div id="serviceDiagramContainer" class="w-full h-auto min-w-max">
+                    <!-- 動的描画 -->
+                </div>
+            </div>
+        </div>
+    </div>
+</aside>
+
+<!-- モーダル: 駅共有確認ダイアログ -->
+<div id="shareStationModal" class="hidden fixed inset-0 z-[3000] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+        <div class="flex items-center space-x-3 text-amber-400">
+            <i class="fa-solid fa-code-merge text-2xl"></i>
+            <h3 class="font-bold text-base text-slate-100">駅・信号場の追加確認</h3>
+        </div>
+        <p id="shareStationModalText" class="text-xs text-slate-300 leading-relaxed">
+            他の路線の地点と重なっています。
+        </p>
+        <div class="flex items-center justify-end space-x-2 pt-2">
+            <button id="btnCancelShare" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg transition-all">
+                キャンセル
+            </button>
+            <button id="btnConfirmShare" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg shadow transition-all">
+                この地点を路線Bに追加
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- モーダル: 独自UI 地点（駅・信号場・点）編集ダイアログ -->
+<div id="pointEditModal" class="hidden fixed inset-0 z-[3000] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+            <div class="flex items-center space-x-2">
+                <i class="fa-solid fa-location-dot text-blue-400"></i>
+                <h3 class="font-bold text-sm text-slate-100">地点の編集</h3>
+            </div>
+            <button id="btnClosePointModal" class="text-slate-400 hover:text-white p-1">
+                <i class="fa-solid fa-xmark text-base"></i>
+            </button>
+        </div>
+
+        <div class="space-y-3">
+            <div>
+                <label class="block text-[11px] text-slate-400 font-semibold mb-1.5">地点の種類</label>
+                <div class="grid grid-cols-3 gap-2">
+                    <button id="btnTypeStation" type="button" class="px-3 py-2 bg-slate-950 hover:bg-slate-800 border border-slate-700 rounded-xl flex flex-col items-center justify-center text-slate-200 transition-all">
+                        <span class="text-base font-bold text-blue-400">○</span>
+                        <span class="text-[11px] font-semibold mt-0.5">駅</span>
+                    </button>
+                    <button id="btnTypeSignal" type="button" class="px-3 py-2 bg-slate-950 hover:bg-slate-800 border border-slate-700 rounded-xl flex flex-col items-center justify-center text-slate-200 transition-all">
+                        <span class="text-sm font-bold text-emerald-400">△</span>
+                        <span class="text-[11px] font-semibold mt-0.5">信号場</span>
+                    </button>
+                    <button id="btnTypePoint" type="button" class="px-3 py-2 bg-slate-950 hover:bg-slate-800 border border-slate-700 rounded-xl flex flex-col items-center justify-center text-slate-200 transition-all">
+                        <span class="text-sm font-bold text-slate-400">◻︎</span>
+                        <span class="text-[11px] font-semibold mt-0.5">点</span>
+                    </button>
+                </div>
+            </div>
+
+            <div id="pointNameWrapper">
+                <label class="block text-[11px] text-slate-400 font-semibold mb-1">名称</label>
+                <input type="text" id="inputPointNameModal" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-blue-500" placeholder="駅名・信号場名を入力">
+            </div>
+        </div>
+
+        <div class="flex items-center justify-between pt-3 border-t border-slate-800">
+            <button id="btnDeletePointModal" type="button" class="text-red-400 hover:text-red-300 font-semibold text-xs py-2 flex items-center space-x-1">
+                <i class="fa-solid fa-trash-can"></i>
+                <span>削除</span>
+            </button>
+            <button id="btnSavePointModal" type="button" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-lg shadow transition-all">
+                保存
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- モーダル: 種別編集ダイアログ -->
+<div id="editServiceModal" class="hidden fixed inset-0 z-[3000] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+            <h3 class="font-bold text-sm text-slate-100 flex items-center space-x-2">
+                <i class="fa-solid fa-pen-to-square text-blue-400"></i>
+                <span id="editServiceModalTitle">列車種別の編集</span>
+            </h3>
+            <button id="btnCloseServiceModal" class="text-slate-400 hover:text-white p-1">
+                <i class="fa-solid fa-xmark text-base"></i>
+            </button>
+        </div>
+
+        <div class="overflow-y-auto space-y-4 pr-1 flex-1 text-xs">
+            <div>
+                <label class="block text-[11px] text-slate-400 font-semibold mb-1">種別名</label>
+                <input type="text" id="inputServiceName" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-blue-500" placeholder="例: 急行、快速、各駅停車">
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 pt-2 border-t border-slate-800">
+                <div>
+                    <label class="block text-[11px] text-slate-400 font-semibold mb-1">種別カラー</label>
+                    <div class="flex items-center space-x-2">
+                        <input type="color" id="inputServiceColor" class="w-8 h-8 rounded border-0 bg-transparent cursor-pointer">
+                        <span id="lblServiceColorHex" class="font-mono text-slate-400">#3b82f6</span>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-[11px] text-slate-400 font-semibold mb-1">線の太さ</label>
+                    <input type="range" id="rangeServiceLineWidth" min="2" max="10" value="4" class="w-full accent-blue-500 mt-2">
+                    <span id="lblServiceLineWidth" class="text-[10px] text-slate-400">4px</span>
+                </div>
+            </div>
+
+            <!-- 運行端部設定 -->
+            <div class="grid grid-cols-2 gap-3 pt-2 border-t border-slate-800">
+                <div>
+                    <label class="block text-[11px] text-slate-400 font-semibold mb-1">始発側の端スタイル</label>
+                    <select id="selectStartStyle" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-blue-500">
+                        <option value="terminal">当駅始発（終点）</option>
+                        <option value="through">直通（線が伸びる）</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-[11px] text-slate-400 font-semibold mb-1">終着側の端スタイル</label>
+                    <select id="selectEndStyle" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-blue-500">
+                        <option value="terminal">当駅終着（終点）</option>
+                        <option value="through">直通（線が伸びる）</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- 通過駅の表示設定 -->
+            <div class="pt-2 border-t border-slate-800">
+                <label class="block text-[11px] text-slate-400 font-semibold mb-1">通過駅の表示マーク</label>
+                <select id="selectPassStyle" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-blue-500">
+                    <option value="none">なし（スッキリ非表示）</option>
+                    <option value="dot">小さな点（・）</option>
+                    <option value="line">通過線マーク（｜）</option>
+                </select>
+            </div>
+
+            <!-- 運転区間（運行する区間）の設定 -->
+            <div class="space-y-2 pt-2 border-t border-slate-800">
+                <div class="flex items-center justify-between">
+                    <span class="font-bold text-slate-300">運転区間（運行する区間）の設定</span>
+                    <button type="button" id="btnAddNonOpSection" class="text-blue-400 hover:text-blue-300 text-[11px] font-semibold flex items-center space-x-1">
+                        <i class="fa-solid fa-plus text-[10px]"></i>
+                        <span>運転区間を追加</span>
+                    </button>
+                </div>
+                <p class="text-[10px] text-slate-400">「A駅からC駅まで運転」のように運行区間と区間ごとの端部（直通/終点）を設定できます。指定がない場合は路線全域で運転します。</p>
+                <div id="nonOpSectionsList" class="space-y-2.5">
+                    <!-- 動的に運転区間の選択行を追加 -->
+                </div>
+            </div>
+
+            <!-- 停車駅選択チェックリスト -->
+            <div class="space-y-2 pt-2 border-t border-slate-800">
+                <div class="flex items-center justify-between">
+                    <span class="font-bold text-slate-300">停車駅の選択（チェック）</span>
+                    <div class="space-x-2 text-[10px]">
+                        <button type="button" id="btnSelectAllStations" class="text-blue-400 hover:underline">全選択</button>
+                        <span class="text-slate-600">|</span>
+                        <button type="button" id="btnClearAllStations" class="text-slate-400 hover:underline">全解除</button>
+                    </div>
+                </div>
+                <p class="text-[10px] text-slate-400">チェックを入れた最初の駅が「始発」、最後の駅が「終着」となります。</p>
+                
+                <div id="serviceStationsChecklist" class="space-y-1.5 max-h-48 overflow-y-auto bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    <!-- 動的チェックボックス -->
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-between pt-3 border-t border-slate-800">
+            <button id="btnDeleteServiceType" class="text-red-400 hover:text-red-300 font-semibold text-xs px-3 py-2 flex items-center space-x-1">
+                <i class="fa-solid fa-trash"></i>
+                <span>この種別を削除</span>
+            </button>
+            <div class="flex items-center space-x-2">
+                <button id="btnCancelServiceModal" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-lg transition-all">
+                    キャンセル
+                </button>
+                <button id="btnSaveServiceModal" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg shadow transition-all">
+                    保存
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- モーダル: データJSON入出力ダイアログ -->
+<div id="dataExportModal" class="hidden fixed inset-0 z-[3000] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-5 shadow-2xl space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+            <h3 class="font-bold text-sm text-slate-100 flex items-center space-x-2">
+                <i class="fa-solid fa-file-code text-emerald-400"></i>
+                <span>全路線データの保存・読込 (JSON)</span>
+            </h3>
+            <button id="btnCloseDataModal" class="text-slate-400 hover:text-white p-1">
+                <i class="fa-solid fa-xmark text-base"></i>
+            </button>
+        </div>
+        <p class="text-xs text-slate-400">
+            全路線データをファイルとして保存・読み込みできます。または下のテキストエリアで直接コピー＆ペーストも可能です。
+        </p>
+
+        <!-- ファイル選択・保存アクションボタン群 -->
+        <div class="flex flex-wrap gap-2 pt-1 pb-1">
+            <button id="btnDownloadJsonFile" class="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg shadow transition-all flex items-center space-x-1.5">
+                <i class="fa-solid fa-download"></i>
+                <span>ファイルに保存 (JSON)</span>
+            </button>
+            <label class="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg transition-all flex items-center space-x-1.5 cursor-pointer">
+                <i class="fa-solid fa-file-import"></i>
+                <span>ファイルから読み込み</span>
+                <input type="file" id="inputJsonFileInput" accept=".json" class="hidden">
+            </label>
+        </div>
+
+        <textarea id="textareaJsonData" class="w-full h-40 bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono text-[11px] text-slate-200 focus:outline-none focus:border-emerald-500 resize-none"></textarea>
+        <div class="flex items-center justify-between pt-2">
+            <button id="btnCopyJsonData" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg transition-all flex items-center space-x-1">
+                <i class="fa-solid fa-copy"></i>
+                <span>テキストをコピー</span>
+            </button>
+            <button id="btnImportJsonData" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg shadow transition-all flex items-center space-x-1">
+                <i class="fa-solid fa-upload"></i>
+                <span>テキストから読み込み</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- モーダル: 汎用カスタム確認/通知ダイアログ（ポップアップブロック対策） -->
+<div id="customAlertModal" class="hidden fixed inset-0 z-[4000] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+        <div class="flex items-center space-x-3 text-blue-400">
+            <i id="customAlertIcon" class="fa-solid fa-circle-info text-2xl"></i>
+            <h3 id="customAlertTitle" class="font-bold text-base text-slate-100">お知らせ</h3>
+        </div>
+        <p id="customAlertMessage" class="text-xs text-slate-300 leading-relaxed"></p>
+        <div id="customAlertButtons" class="flex items-center justify-end space-x-2 pt-2">
+            <button id="customAlertCancelBtn" class="hidden px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg transition-all">
+                キャンセル
+            </button>
+            <button id="customAlertOkBtn" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg shadow transition-all">
+                OK
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+    window.onload = function() {
+        // ---- アプリケーション状態 ----
+        let lines = [];
+        let activeLineId = null;
+        let pendingShareData = null;
+        let editingServiceTypeId = null;
+        let editingPointContext = null; // 現在編集中の地点コンテキスト
+        let tempNonOpSections = []; // 種別編集モーダル一時保存用
+        let isDrawingMode = true;
+
+        // 汎用カスタムアラート/コンファーム関数（ブラウザのポップアップブロックを回避）
+        let customAlertCallback = null;
+        function showCustomModal(title, message, isConfirm = false, iconClass = "fa-solid fa-circle-info text-blue-400", onOk = null) {
+            const modal = document.getElementById('customAlertModal');
+            document.getElementById('customAlertTitle').textContent = title;
+            document.getElementById('customAlertMessage').textContent = message;
+            
+            const iconEl = document.getElementById('customAlertIcon');
+            iconEl.className = iconClass;
+
+            const cancelBtn = document.getElementById('customAlertCancelBtn');
+            if (isConfirm) {
+                cancelBtn.classList.remove('hidden');
+            } else {
+                cancelBtn.classList.add('hidden');
+            }
+
+            customAlertCallback = onOk;
+            modal.classList.remove('hidden');
+        }
+
+        document.getElementById('customAlertOkBtn').onclick = function() {
+            document.getElementById('customAlertModal').classList.add('hidden');
+            if (customAlertCallback) {
+                customAlertCallback(true);
+                customAlertCallback = null;
+            }
+        };
+
+        document.getElementById('customAlertCancelBtn').onclick = function() {
+            document.getElementById('customAlertModal').classList.add('hidden');
+            if (customAlertCallback) {
+                customAlertCallback(false);
+                customAlertCallback = null;
+            }
+        };
+
+        // Leaflet 地図初期化
+        const map = L.map('map', { zoomControl: false }).setView([35.6812, 139.7671], 13);
+        L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors',
+            maxZoom: 19
+        }).addTo(map);
+
+        const lineLayers = L.layerGroup().addTo(map);
+        const pointLayers = L.layerGroup().addTo(map);
+
+        map.on('click', function(e) {
+            if (!isDrawingMode) return;
+            const line = getActiveLine();
+            if (!line) {
+                showCustomModal("注意", "路線が選択されていません。先に新規路線を作成してください。", false, "fa-solid fa-triangle-exclamation text-amber-400");
+                return;
+            }
+
+            if (line.isLocked) {
+                showCustomModal("ロック中", "選択中の路線は位置がロックされています。編集する場合は路線設定からロックを解除してください。", false, "fa-solid fa-lock text-amber-400");
+                return;
+            }
+
+            const clickedLatLng = e.latlng;
+            // 既存地点の重ね合わせモーダルを廃止し、独立した新しい点を配置
+            addNewPointToActiveLine(clickedLatLng.lat, clickedLatLng.lng, 'point');
+        });
+
+        function addNewPointToActiveLine(lat, lng, type, sharedId = null) {
+            const line = getActiveLine();
+            if (!line) return;
+
+            const pointId = sharedId || 'p_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4);
+            let defaultName = '';
+            if (type === 'station') {
+                defaultName = `駅 ${line.points.filter(p => p.type === 'station').length + 1}`;
+            } else if (type === 'signal') {
+                defaultName = `信号場 ${line.points.filter(p => p.type === 'signal').length + 1}`;
+            }
+
+            const newPoint = {
+                id: pointId,
+                lat: lat,
+                lng: lng,
+                type: type, // 'station', 'signal', 'point'
+                name: defaultName
+            };
+
+            line.points.push(newPoint);
+            saveToLocalStorage();
+            renderMap();
+            renderDashboard();
+            if (!document.getElementById('diagramPanel').classList.contains('hidden')) {
+                renderDiagramPanel();
+            }
+        }
+
+        // ---- データヘルパー ----
+        function getActiveLine() {
+            return lines.find(l => l.id === activeLineId) || null;
+        }
+
+        function createDefaultLine() {
+            const id = 'line_' + Date.now();
+            const colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
+            const color = colors[lines.length % colors.length];
+            const newLine = {
+                id: id,
+                name: `新規路線 ${lines.length + 1}`,
+                color: color,
+                isLocked: false,
+                style: 'solid',
+                lineWidth: 5,
+                stationSize: 16,
+                stationBorder: 3,
+                signalSize: 18,
+                signalBorder: 2,
+                pointSize: 8,
+                pointBorder: 1.5,
+                points: [],
+                serviceTypes: [
+                    {
+                        id: 'srv_local_' + Date.now(),
+                        name: '各駅停車',
+                        color: color,
+                        lineWidth: 4,
+                        startStyle: 'terminal',
+                        endStyle: 'terminal',
+                        passStyle: 'none',
+                        nonOpSections: [],
+                        stops: {}
+                    }
+                ]
+            };
+            lines.push(newLine);
+            activeLineId = id;
+            saveToLocalStorage();
+            renderMap();
+            renderDashboard();
+        }
+
+        function saveToLocalStorage() {
+            try {
+                localStorage.setItem('railway_manager_lines', JSON.stringify(lines));
+                localStorage.setItem('railway_manager_active_id', activeLineId || '');
+            } catch (e) {
+                console.error("LocalStorage save error", e);
+            }
+        }
+
+        function loadFromLocalStorage() {
+            try {
+                const data = localStorage.getItem('railway_manager_lines');
+                const activeId = localStorage.getItem('railway_manager_active_id');
+                if (data) {
+                    lines = JSON.parse(data);
+                    // 既存データに serviceTypes がない場合に安全に補完
+                    lines.forEach(line => {
+                        if (!line.serviceTypes) {
+                            line.serviceTypes = [
+                                {
+                                    id: 'srv_local_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+                                    name: '各駅停車',
+                                    color: line.color || '#3b82f6',
+                                    lineWidth: 4,
+                                    startStyle: 'terminal',
+                                    endStyle: 'terminal',
+                                    passStyle: 'none',
+                                    nonOpSections: [],
+                                    stops: {}
+                                }
+                            ];
+                        }
+                    });
+                    if (activeId && lines.some(l => l.id === activeId)) {
+                        activeLineId = activeId;
+                    } else if (lines.length > 0) {
+                        activeLineId = lines[0].id;
+                    }
+                }
+            } catch (e) {
+                console.error("LocalStorage load error", e);
+            }
+        }
+
+        // ---- 地図描画処理 ----
+        function renderMap() {
+            lineLayers.clearLayers();
+            pointLayers.clearLayers();
+
+            lines.forEach(line => {
+                if (line.points.length < 1) return;
+
+                const isSelected = (line.id === activeLineId);
+                const latlngs = line.points.map(p => [p.lat, p.lng]);
+
+                if (latlngs.length >= 2) {
+                    const polylineOptions = {
+                        color: line.color,
+                        weight: isSelected ? (line.lineWidth + 2) : line.lineWidth,
+                        opacity: isSelected ? 1.0 : 0.65
+                    };
+                    if (line.style === 'dashed') polylineOptions.dashArray = '8, 8';
+                    if (line.style === 'dotted') polylineOptions.dashArray = '3, 6';
+
+                    const polyline = L.polyline(latlngs, polylineOptions);
+                    polyline.on('click', (e) => {
+                        L.DomEvent.stopPropagation(e);
+                        activeLineId = line.id;
+                        saveToLocalStorage();
+                        renderMap();
+                        renderDashboard();
+                    });
+                    lineLayers.addLayer(polyline);
+                }
+
+                line.points.forEach((point, index) => {
+                    // ロック状態のときは「点 (point)」を画面に表示しない
+                    if (line.isLocked && point.type === 'point') return;
+
+                    let iconHtml = '';
+                    let iconSize = [16, 16];
+                    let iconAnchor = [8, 8];
+
+                    if (point.type === 'station') {
+                        const sz = line.stationSize || 16;
+                        const bw = line.stationBorder || 3;
+                        iconSize = [sz, sz];
+                        iconAnchor = [sz/2, sz/2];
+                        iconHtml = `<div style="width:${sz}px; height:${sz}px; border-radius:50%; background:#ffffff; border:${bw}px solid ${line.color}; box-shadow: 0 2px 4px rgba(0,0,0,0.4);"></div>`;
+                    } else if (point.type === 'signal') {
+                        const sz = line.signalSize || 18;
+                        const bw = line.signalBorder || 2;
+                        iconSize = [sz, sz];
+                        iconAnchor = [sz/2, sz/2];
+                        iconHtml = `<div style="width:0; height:0; border-left:${sz/2}px solid transparent; border-right:${sz/2}px solid transparent; border-bottom:${sz}px solid ${line.color}; filter: drop-shadow(0px 2px 2px rgba(0,0,0,0.5));"></div>`;
+                    } else {
+                        // 点 (黒枠白塗りの小さい正方形 ◻︎)
+                        const sz = line.pointSize || 8;
+                        const bw = line.pointBorder || 1.5;
+                        iconSize = [sz, sz];
+                        iconAnchor = [sz/2, sz/2];
+                        iconHtml = `<div style="width:${sz}px; height:${sz}px; background:#ffffff; border:${bw}px solid #000000; border-radius:2px; box-shadow: 0 1px 3px rgba(0,0,0,0.3);"></div>`;
+                    }
+
+                    const customIcon = L.divIcon({
+                        html: iconHtml,
+                        className: 'custom-map-marker',
+                        iconSize: iconSize,
+                        iconAnchor: iconAnchor
+                    });
+
+                    // ロック中の場合はドラッグ不可（draggable: false）に設定
+                    const marker = L.marker([point.lat, point.lng], { 
+                        icon: customIcon, 
+                        draggable: !line.isLocked 
+                    });
+
+                    if (!line.isLocked) {
+                        marker.on('dragend', function(ev) {
+                            const newPos = ev.target.getLatLng();
+                            point.lat = newPos.lat;
+                            point.lng = newPos.lng;
+                            saveToLocalStorage();
+                            renderMap();
+                            renderDashboard();
+                            if (!document.getElementById('diagramPanel').classList.contains('hidden')) {
+                                renderDiagramPanel();
+                            }
+                        });
+                    }
+
+                    marker.on('click', function(ev) {
+                        L.DomEvent.stopPropagation(ev);
+                        openPointEditModal(line.id, point.id);
+                    });
+
+                    pointLayers.addLayer(marker);
+                });
+            });
+
+            updateHUD();
+        }
+
+        function updateHUD() {
+            const line = getActiveLine();
+            const activeIndicator = document.getElementById('activeLineIndicator');
+            const activeName = document.getElementById('activeLineName');
+            const activeStats = document.getElementById('activeLineStats');
+
+            if (line) {
+                activeIndicator.style.backgroundColor = line.color;
+                activeName.textContent = line.name;
+                const stationCount = line.points.filter(p => p.type === 'station').length;
+                let totalDistKm = 0;
+                for (let i = 0; i < line.points.length - 1; i++) {
+                    const p1 = L.latLng(line.points[i].lat, line.points[i].lng);
+                    const p2 = L.latLng(line.points[i+1].lat, line.points[i+1].lng);
+                    totalDistKm += p1.distanceTo(p2) / 1000;
+                }
+                activeStats.textContent = `${stationCount} 駅 / ${totalDistKm.toFixed(2)} km`;
+            } else {
+                activeIndicator.style.backgroundColor = '#64748b';
+                activeName.textContent = '路線未選択';
+                activeStats.textContent = '0 駅 / 0.00 km';
+            }
+        }
+
+        // ---- 地点編集モーダル（独自UI） ----
+        function openPointEditModal(lineId, pointId) {
+            const line = lines.find(l => l.id === lineId);
+            if (!line) return;
+            const point = line.points.find(p => p.id === pointId);
+            if (!point) return;
+
+            editingPointContext = {
+                lineId: lineId,
+                pointId: pointId,
+                type: point.type
+            };
+
+            updatePointTypeButtons(point.type);
+            const inputName = document.getElementById('inputPointNameModal');
+            inputName.value = point.name || '';
+
+            document.getElementById('pointEditModal').classList.remove('hidden');
+        }
+
+        function updatePointTypeButtons(type) {
+            if (!editingPointContext) return;
+            editingPointContext.type = type;
+            const btnStation = document.getElementById('btnTypeStation');
+            const btnSignal = document.getElementById('btnTypeSignal');
+            const btnPoint = document.getElementById('btnTypePoint');
+
+            [btnStation, btnSignal, btnPoint].forEach(b => b.classList.remove('border-blue-500', 'bg-slate-800'));
+
+            if (type === 'station') {
+                btnStation.classList.add('border-blue-500', 'bg-slate-800');
+            } else if (type === 'signal') {
+                btnSignal.classList.add('border-blue-500', 'bg-slate-800');
+            } else {
+                btnPoint.classList.add('border-blue-500', 'bg-slate-800');
+            }
+        }
+
+        document.getElementById('btnTypeStation').onclick = () => updatePointTypeButtons('station');
+        document.getElementById('btnTypeSignal').onclick = () => updatePointTypeButtons('signal');
+        document.getElementById('btnTypePoint').onclick = () => updatePointTypeButtons('point');
+
+        document.getElementById('btnClosePointModal').onclick = function() {
+            document.getElementById('pointEditModal').classList.add('hidden');
+        };
+
+        document.getElementById('btnDeletePointModal').onclick = function() {
+            if (!editingPointContext) return;
+            const line = lines.find(l => l.id === editingPointContext.lineId);
+            if (!line) return;
+
+            line.points = line.points.filter(p => p.id !== editingPointContext.pointId);
+            saveToLocalStorage();
+            renderMap();
+            renderDashboard();
+            if (!document.getElementById('diagramPanel').classList.contains('hidden')) {
+                renderDiagramPanel();
+            }
+            document.getElementById('pointEditModal').classList.add('hidden');
+        };
+
+        document.getElementById('btnSavePointModal').onclick = function() {
+            if (!editingPointContext) return;
+            const line = lines.find(l => l.id === editingPointContext.lineId);
+            if (!line) return;
+
+            const point = line.points.find(p => p.id === editingPointContext.pointId);
+            if (point) {
+                const oldType = point.type;
+                point.type = editingPointContext.type;
+                const newName = document.getElementById('inputPointNameModal').value.trim();
+
+                // 名称未設定かつ種類が変更された場合、デフォルト名を付与
+                if (!newName) {
+                    if (point.type === 'station') {
+                        point.name = `駅 ${line.points.filter(p => p.type === 'station').length}`;
+                    } else if (point.type === 'signal') {
+                        point.name = `信号場 ${line.points.filter(p => p.type === 'signal').length}`;
+                    } else {
+                        point.name = '';
+                    }
+                } else {
+                    point.name = newName;
+                }
+            }
+
+            saveToLocalStorage();
+            renderMap();
+            renderDashboard();
+            if (!document.getElementById('diagramPanel').classList.contains('hidden')) {
+                renderDiagramPanel();
+            }
+            document.getElementById('pointEditModal').classList.add('hidden');
+        };
+
+        // ---- UI / ナビゲーション イベント ----
+        const hamburgerBtn = document.getElementById('hamburgerBtn');
+        const menuDropdown = document.getElementById('menuDropdown');
+
+        hamburgerBtn.onclick = function(e) {
+            e.stopPropagation();
+            menuDropdown.classList.toggle('hidden');
+        };
+
+        document.body.onclick = function() {
+            menuDropdown.classList.add('hidden');
+        };
+
+        document.getElementById('menuNavMap').onclick = function() {
+            document.getElementById('dashboardPanel').classList.add('hidden');
+            document.getElementById('diagramPanel').classList.add('hidden');
+        };
+
+        document.getElementById('menuNavDashboard').onclick = function() {
+            document.getElementById('dashboardPanel').classList.remove('hidden');
+            document.getElementById('diagramPanel').classList.add('hidden');
+            renderDashboard();
+        };
+
+        document.getElementById('menuNavDiagram').onclick = function() {
+            document.getElementById('diagramPanel').classList.remove('hidden');
+            renderDiagramPanel();
+        };
+
+        document.getElementById('menuNavExport').onclick = function() {
+            openDataExportModal();
+        };
+
+        document.getElementById('closeDashboardBtn').onclick = function() {
+            document.getElementById('dashboardPanel').classList.add('hidden');
+        };
+
+        document.getElementById('closeDiagramPanelBtn').onclick = function() {
+            document.getElementById('diagramPanel').classList.add('hidden');
+        };
+
+        document.getElementById('quickAddLineBtn').onclick = function() {
+            createDefaultLine();
+            document.getElementById('dashboardPanel').classList.remove('hidden');
+            switchTab('edit');
+        };
+
+        document.getElementById('btnCreateLine').onclick = function() {
+            createDefaultLine();
+            switchTab('edit');
+        };
+
+        // ---- ダッシュボード タブ切り替え ----
+        const tabLinesBtn = document.getElementById('tabLinesBtn');
+        const tabEditBtn = document.getElementById('tabEditBtn');
+        const tabStationsBtn = document.getElementById('tabStationsBtn');
+
+        function switchTab(tabName) {
+            [tabLinesBtn, tabEditBtn, tabStationsBtn].forEach(btn => {
+                btn.classList.remove('border-blue-500', 'text-blue-400');
+                btn.classList.add('border-transparent', 'text-slate-400');
+            });
+            document.getElementById('tabContentLines').classList.add('hidden');
+            document.getElementById('tabContentEdit').classList.add('hidden');
+            document.getElementById('tabContentStations').classList.add('hidden');
+
+            if (tabName === 'lines') {
+                tabLinesBtn.classList.add('border-blue-500', 'text-blue-400');
+                document.getElementById('tabContentLines').classList.remove('hidden');
+            } else if (tabName === 'edit') {
+                tabEditBtn.classList.add('border-blue-500', 'text-blue-400');
+                document.getElementById('tabContentEdit').classList.remove('hidden');
+            } else if (tabName === 'stations') {
+                tabStationsBtn.classList.add('border-blue-500', 'text-blue-400');
+                document.getElementById('tabContentStations').classList.remove('hidden');
+            }
+        }
+
+        tabLinesBtn.onclick = () => switchTab('lines');
+        tabEditBtn.onclick = () => switchTab('edit');
+        tabStationsBtn.onclick = () => switchTab('stations');
+
+        // ---- 路線マネージャーレンダリング ----
+        function renderDashboard() {
+            renderLinesList();
+            renderLineSettingsForm();
+            renderStationsList();
+        }
+
+        function renderLinesList() {
+            const container = document.getElementById('linesListContainer');
+            container.innerHTML = '';
+
+            if (lines.length === 0) {
+                container.innerHTML = `<div class="text-xs text-slate-500 p-4 text-center border border-dashed border-slate-800 rounded-xl">路線が登録されていません</div>`;
+                return;
+            }
+
+            // カテゴリ（見出し）ごとにグループ化して描画
+            let lastCategory = null;
+
+            lines.forEach((line, index) => {
+                const category = (line.category || '').trim();
+
+                // 新しい見出しがあればタイトルヘッダーを描画
+                if (category !== lastCategory) {
+                    const header = document.createElement('div');
+                    header.className = 'pt-2 pb-1 text-[11px] font-extrabold text-blue-400 border-b border-slate-800 flex items-center space-x-1.5 uppercase tracking-wider';
+                    header.innerHTML = `
+                        <i class="fa-solid fa-folder-open text-[10px]"></i>
+                        <span>${category || '未分類'}</span>
+                    `;
+                    container.appendChild(header);
+                    lastCategory = category;
+                }
+
+                const isActive = (line.id === activeLineId);
+                const stationCount = line.points.filter(p => p.type === 'station').length;
+                const signalCount = line.points.filter(p => p.type === 'signal').length;
+                const isFirst = (index === 0);
+                const isLast = (index === lines.length - 1);
+
+                const item = document.createElement('div');
+                item.className = `p-3 rounded-xl border transition-all flex items-center justify-between ${
+                    isActive ? 'bg-slate-800/80 border-blue-500/80 shadow-md' : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                }`;
+
+                item.innerHTML = `
+                    <div class="flex items-center space-x-3 cursor-pointer flex-1 min-w-0 mr-2" class="btn-select-area">
+                        <div class="w-3.5 h-3.5 rounded-full border border-white/40 shrink-0" style="background-color: ${line.color}"></div>
+                        <div class="flex flex-col min-w-0">
+                            <span class="font-bold text-xs text-slate-100 truncate">${line.name}</span>
+                            <span class="text-[10px] text-slate-400">${stationCount} 駅 / ${signalCount} 信号場</span>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-1 shrink-0">
+                        <button class="btn-move-line-up p-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 disabled:opacity-30 text-slate-300 rounded-lg text-[10px]" ${isFirst ? 'disabled' : ''}>
+                            <i class="fa-solid fa-arrow-up"></i>
+                        </button>
+                        <button class="btn-move-line-down p-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 disabled:opacity-30 text-slate-300 rounded-lg text-[10px]" ${isLast ? 'disabled' : ''}>
+                            <i class="fa-solid fa-arrow-down"></i>
+                        </button>
+                        <button class="btn-select-line px-2 py-1 text-[11px] font-semibold rounded-lg ${isActive ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'} hover:bg-blue-500 hover:text-white transition-all ml-1">
+                            ${isActive ? '選択中' : '選択'}
+                        </button>
+                    </div>
+                `;
+
+                // 路線選択イベント
+                item.querySelector('.btn-select-area')?.addEventListener('click', () => selectLine(line.id));
+                item.querySelector('.btn-select-line').onclick = () => selectLine(line.id);
+
+                // 上下並び替えイベント
+                item.querySelector('.btn-move-line-up').onclick = (e) => {
+                    e.stopPropagation();
+                    moveLine(index, -1);
+                };
+                item.querySelector('.btn-move-line-down').onclick = (e) => {
+                    e.stopPropagation();
+                    moveLine(index, 1);
+                };
+
+                container.appendChild(item);
+            });
+        }
+
+        function selectLine(id) {
+            activeLineId = id;
+            saveToLocalStorage();
+            renderMap();
+            renderDashboard();
+        }
+
+        function moveLine(index, direction) {
+            const targetIndex = index + direction;
+            if (targetIndex < 0 || targetIndex >= lines.length) return;
+
+            const temp = lines[index];
+            lines[index] = lines[targetIndex];
+            lines[targetIndex] = temp;
+
+            saveToLocalStorage();
+            renderMap();
+            renderDashboard();
+        }
+
+        function renderLineSettingsForm() {
+            const line = getActiveLine();
+            const noNotice = document.getElementById('noLineSelectedNotice');
+            const form = document.getElementById('lineSettingsForm');
+
+            const panelColor = document.getElementById('panelActiveLineColor');
+            const panelName = document.getElementById('panelActiveLineName');
+            const panelBadge = document.getElementById('panelActiveLineBadge');
+
+            if (!line) {
+                noNotice.classList.remove('hidden');
+                form.classList.add('hidden');
+                panelColor.style.backgroundColor = '#64748b';
+                panelName.textContent = '未選択';
+                panelBadge.textContent = '未選択';
+                return;
+            }
+
+            noNotice.classList.add('hidden');
+            form.classList.remove('hidden');
+
+            panelColor.style.backgroundColor = line.color;
+            panelName.textContent = line.name;
+            panelBadge.textContent = line.isLocked ? 'ロック中' : '編集可能';
+
+            // ロックUI状態更新
+            const chkLock = document.getElementById('chkLockLine');
+            const iconLock = document.getElementById('iconLineLock');
+            chkLock.checked = !!line.isLocked;
+            if (line.isLocked) {
+                iconLock.className = 'fa-solid fa-lock text-amber-400 text-xs';
+            } else {
+                iconLock.className = 'fa-solid fa-lock-open text-slate-400 text-xs';
+            }
+
+            document.getElementById('inputLineCategory').value = line.category || '';
+            document.getElementById('inputLineName').value = line.name;
+            document.getElementById('inputLineColor').value = line.color;
+            document.getElementById('lblLineColorHex').textContent = line.color;
+            document.getElementById('selectLineStyle').value = line.style || 'solid';
+
+            document.getElementById('rangeLineWidth').value = line.lineWidth || 5;
+            document.getElementById('lblLineWidth').textContent = `${line.lineWidth || 5}px`;
+
+            document.getElementById('rangeStationSize').value = line.stationSize || 16;
+            document.getElementById('lblStationSize').textContent = `${line.stationSize || 16}px`;
+            document.getElementById('rangeStationBorder').value = line.stationBorder || 3;
+            document.getElementById('lblStationBorder').textContent = `${line.stationBorder || 3}px`;
+
+            document.getElementById('rangeSignalSize').value = line.signalSize || 18;
+            document.getElementById('lblSignalSize').textContent = `${line.signalSize || 18}px`;
+            document.getElementById('rangeSignalBorder').value = line.signalBorder || 2;
+            document.getElementById('lblSignalBorder').textContent = `${line.signalBorder || 2}px`;
+
+            document.getElementById('rangePointSize').value = line.pointSize || 8;
+            document.getElementById('lblPointSize').textContent = `${line.pointSize || 8}px`;
+            document.getElementById('rangePointBorder').value = line.pointBorder || 1.5;
+            document.getElementById('lblPointBorder').textContent = `${line.pointBorder || 1.5}px`;
+        }
+
+        // 設定フォームのバインディング
+        document.getElementById('inputLineCategory').oninput = function(e) {
+            const line = getActiveLine();
+            if (line) {
+                line.category = e.target.value;
+                saveToLocalStorage();
+                renderLinesList();
+            }
+        };
+
+        document.getElementById('chkLockLine').onchange = function(e) {
+            const line = getActiveLine();
+            if (line) {
+                line.isLocked = e.target.checked;
+                saveToLocalStorage();
+                renderMap();
+                renderDashboard();
+            }
+        };
+
+        document.getElementById('inputLineName').oninput = function(e) {
+            const line = getActiveLine();
+            if (line) {
+                line.name = e.target.value;
+                saveToLocalStorage();
+                updateHUD();
+                renderLinesList();
+            }
+        };
+
+        document.getElementById('inputLineColor').oninput = function(e) {
+            const line = getActiveLine();
+            if (line) {
+                line.color = e.target.value;
+                document.getElementById('lblLineColorHex').textContent = line.color;
+                saveToLocalStorage();
+                renderMap();
+                renderLinesList();
+            }
+        };
+
+        document.getElementById('selectLineStyle').onchange = function(e) {
+            const line = getActiveLine();
+            if (line) {
+                line.style = e.target.value;
+                saveToLocalStorage();
+                renderMap();
+            }
+        };
+
+        document.getElementById('rangeLineWidth').oninput = function(e) {
+            const line = getActiveLine();
+            if (line) {
+                line.lineWidth = parseInt(e.target.value);
+                document.getElementById('lblLineWidth').textContent = `${line.lineWidth}px`;
+                saveToLocalStorage();
+                renderMap();
+            }
+        };
+
+        document.getElementById('rangeStationSize').oninput = function(e) {
+            const line = getActiveLine();
+            if (line) {
+                line.stationSize = parseInt(e.target.value);
+                document.getElementById('lblStationSize').textContent = `${line.stationSize}px`;
+                saveToLocalStorage();
+                renderMap();
+            }
+        };
+
+        document.getElementById('rangeStationBorder').oninput = function(e) {
+            const line = getActiveLine();
+            if (line) {
+                line.stationBorder = parseInt(e.target.value);
+                document.getElementById('lblStationBorder').textContent = `${line.stationBorder}px`;
+                saveToLocalStorage();
+                renderMap();
+            }
+        };
+
+        document.getElementById('rangeSignalSize').oninput = function(e) {
+            const line = getActiveLine();
+            if (line) {
+                line.signalSize = parseInt(e.target.value);
+                document.getElementById('lblSignalSize').textContent = `${line.signalSize}px`;
+                saveToLocalStorage();
+                renderMap();
+            }
+        };
+
+        document.getElementById('rangeSignalBorder').oninput = function(e) {
+            const line = getActiveLine();
+            if (line) {
+                line.signalBorder = parseInt(e.target.value);
+                document.getElementById('lblSignalBorder').textContent = `${line.signalBorder}px`;
+                saveToLocalStorage();
+                renderMap();
+            }
+        };
+
+        document.getElementById('rangePointSize').oninput = function(e) {
+            const line = getActiveLine();
+            if (line) {
+                line.pointSize = parseInt(e.target.value);
+                document.getElementById('lblPointSize').textContent = `${line.pointSize}px`;
+                saveToLocalStorage();
+                renderMap();
+            }
+        };
+
+        document.getElementById('rangePointBorder').oninput = function(e) {
+            const line = getActiveLine();
+            if (line) {
+                line.pointBorder = parseFloat(e.target.value);
+                document.getElementById('lblPointBorder').textContent = `${line.pointBorder}px`;
+                saveToLocalStorage();
+                renderMap();
+            }
+        };
+
+        document.getElementById('btnDeleteCurrentLine').onclick = function() {
+            const line = getActiveLine();
+            if (!line) return;
+
+            showCustomModal("路線の削除確認", `「${line.name}」を削除してもよろしいですか？`, true, "fa-solid fa-triangle-exclamation text-red-400", (confirmed) => {
+                if (confirmed) {
+                    lines = lines.filter(l => l.id !== line.id);
+                    activeLineId = lines.length > 0 ? lines[0].id : null;
+                    saveToLocalStorage();
+                    renderMap();
+                    renderDashboard();
+                }
+            });
+        };
+
+        function renderStationsList() {
+            const container = document.getElementById('stationsListContainer');
+            container.innerHTML = '';
+            const line = getActiveLine();
+
+            if (!line) {
+                container.innerHTML = `<div class="text-xs text-slate-500 p-4 text-center border border-dashed border-slate-800 rounded-xl">路線が選択されていません</div>`;
+                return;
+            }
+
+            const visiblePoints = line.points.filter(p => p.type === 'station' || p.type === 'signal');
+
+            if (visiblePoints.length === 0) {
+                container.innerHTML = `<div class="text-xs text-slate-500 p-4 text-center border border-dashed border-slate-800 rounded-xl">駅または信号場が登録されていません</div>`;
+                return;
+            }
+
+            visiblePoints.forEach((point, idx) => {
+                const item = document.createElement('div');
+                item.className = 'p-2.5 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between text-xs';
+
+                const isStation = (point.type === 'station');
+                const symbolIcon = isStation ? 
+                    `<span class="w-4 h-4 rounded-full border-2 border-blue-400 bg-white inline-block"></span>` : 
+                    `<span class="w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-b-[10px] border-b-emerald-400 inline-block"></span>`;
+
+                item.innerHTML = `
+                    <div class="flex items-center space-x-2.5">
+                        <span class="font-mono text-[10px] text-slate-500 w-4">${idx + 1}</span>
+                        ${symbolIcon}
+                        <span class="font-bold text-slate-200">${point.name || (isStation ? '名称未設定駅' : '名称未設定信号場')}</span>
+                    </div>
+                    <button class="btn-edit-point px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-semibold transition-all">
+                        編集
+                    </button>
+                `;
+
+                item.querySelector('.btn-edit-point').onclick = () => openPointEditModal(line.id, point.id);
+                container.appendChild(item);
+            });
+        }
+
+        // ---- 種別案内図マネージャー（全画面モーダル） ----
+        function renderDiagramPanel() {
+            const line = getActiveLine();
+            const notice = document.getElementById('noLineSelectedNoticeDiagram');
+            const body = document.getElementById('diagramManagerBody');
+
+            const badgeName = document.getElementById('diagramActiveLineName');
+            const badgeDot = document.getElementById('diagramActiveLineDot');
+
+            if (!line) {
+                notice.classList.remove('hidden');
+                body.classList.add('hidden');
+                badgeName.textContent = '路線未選択';
+                badgeDot.style.backgroundColor = '#64748b';
+                document.getElementById('serviceDiagramContainer').innerHTML = `<div class="text-slate-500 text-xs py-10 text-center">路線を選択してください</div>`;
+                return;
+            }
+
+            notice.classList.add('hidden');
+            body.classList.remove('hidden');
+
+            badgeName.textContent = line.name;
+            badgeDot.style.backgroundColor = line.color;
+
+            renderServiceTypesList();
+            renderServiceDiagramPreview();
+        }
+
+        function renderServiceTypesList() {
+            const line = getActiveLine();
+            const container = document.getElementById('serviceTypesListContainer');
+            container.innerHTML = '';
+
+            if (!line.serviceTypes || line.serviceTypes.length === 0) {
+                container.innerHTML = `<div class="text-xs text-slate-500 p-3 text-center border border-dashed border-slate-800 rounded-xl">種別が登録されていません</div>`;
+                return;
+            }
+
+            line.serviceTypes.forEach((srv, index) => {
+                const item = document.createElement('div');
+                item.className = 'p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between text-xs';
+
+                const isFirst = (index === 0);
+                const isLast = (index === line.serviceTypes.length - 1);
+
+                item.innerHTML = `
+                    <div class="flex items-center space-x-3">
+                        <div class="w-3 h-3 rounded-full shrink-0" style="background-color: ${srv.color}"></div>
+                        <span class="font-bold text-slate-200">${srv.name}</span>
+                    </div>
+                    <div class="flex items-center space-x-1.5">
+                        <button class="btn-move-up p-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-300 rounded-lg text-[10px]" ${isFirst ? 'disabled' : ''}>
+                            <i class="fa-solid fa-arrow-up"></i>
+                        </button>
+                        <button class="btn-move-down p-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-300 rounded-lg text-[10px]" ${isLast ? 'disabled' : ''}>
+                            <i class="fa-solid fa-arrow-down"></i>
+                        </button>
+                        <button class="btn-edit-srv px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-blue-400 rounded-lg font-semibold text-[11px] transition-all ml-1">
+                            編集
+                        </button>
+                    </div>
+                `;
+
+                item.querySelector('.btn-move-up').onclick = () => moveServiceType(index, -1);
+                item.querySelector('.btn-move-down').onclick = () => moveServiceType(index, 1);
+                item.querySelector('.btn-edit-srv').onclick = () => openServiceEditModal(srv.id);
+
+                container.appendChild(item);
+            });
+        }
+
+        function moveServiceType(index, direction) {
+            const line = getActiveLine();
+            if (!line || !line.serviceTypes) return;
+
+            const targetIndex = index + direction;
+            if (targetIndex < 0 || targetIndex >= line.serviceTypes.length) return;
+
+            const temp = line.serviceTypes[index];
+            line.serviceTypes[index] = line.serviceTypes[targetIndex];
+            line.serviceTypes[targetIndex] = temp;
+
+            saveToLocalStorage();
+            renderDiagramPanel();
+        }
+
+        document.getElementById('btnAddServiceType').onclick = function() {
+            const line = getActiveLine();
+            if (!line) return;
+
+            const newSrv = {
+                id: 'srv_' + Date.now(),
+                name: `新種別 ${line.serviceTypes.length + 1}`,
+                color: '#ef4444',
+                lineWidth: 4,
+                startStyle: 'terminal',
+                endStyle: 'terminal',
+                passStyle: 'none',
+                nonOpSections: [],
+                stops: {}
+            };
+
+            line.serviceTypes.push(newSrv);
+            saveToLocalStorage();
+            renderDiagramPanel();
+            openServiceEditModal(newSrv.id);
+        };
+
+        // ---- 種別編集モーダル ----
+        function openServiceEditModal(srvId) {
+            const line = getActiveLine();
+            if (!line) return;
+            const srv = line.serviceTypes.find(s => s.id === srvId);
+            if (!srv) return;
+
+            editingServiceTypeId = srvId;
+            tempNonOpSections = JSON.parse(JSON.stringify(srv.nonOpSections || []));
+
+            document.getElementById('inputServiceName').value = srv.name;
+            document.getElementById('inputServiceColor').value = srv.color;
+            document.getElementById('lblServiceColorHex').textContent = srv.color;
+            document.getElementById('rangeServiceLineWidth').value = srv.lineWidth || 4;
+            document.getElementById('lblServiceLineWidth').textContent = `${srv.lineWidth || 4}px`;
+
+            document.getElementById('selectStartStyle').value = srv.startStyle || 'terminal';
+            document.getElementById('selectEndStyle').value = srv.endStyle || 'terminal';
+            document.getElementById('selectPassStyle').value = srv.passStyle || 'none';
+
+            renderModalNonOpSections();
+            renderModalStationsChecklist(srv);
+
+            document.getElementById('editServiceModal').classList.remove('hidden');
+        }
+
+        function renderModalNonOpSections() {
+            const line = getActiveLine();
+            const container = document.getElementById('nonOpSectionsList');
+            container.innerHTML = '';
+
+            const stations = line ? line.points.filter(p => p.type === 'station') : [];
+
+            if (stations.length < 2) {
+                container.innerHTML = `<div class="text-[10px] text-slate-500">運転区間を設定するには路線に駅が2つ以上必要です。</div>`;
+                return;
+            }
+
+            if (tempNonOpSections.length === 0) {
+                container.innerHTML = `<div class="text-[10px] text-slate-500 italic">運転区間の指定なし（路線全域で運転）</div>`;
+                return;
+            }
+
+            tempNonOpSections.forEach((sec, idx) => {
+                const item = document.createElement('div');
+                item.className = 'p-2 bg-slate-950 border border-slate-800 rounded-lg flex flex-col space-y-2 text-xs';
+
+                let fromOptions = stations.map(s => `<option value="${s.id}" ${sec.fromId === s.id ? 'selected' : ''}>${s.name || '駅'}</option>`).join('');
+                let toOptions = stations.map(s => `<option value="${s.id}" ${sec.toId === s.id ? 'selected' : ''}>${s.name || '駅'}</option>`).join('');
+
+                item.innerHTML = `
+                    <div class="flex items-center justify-between">
+                        <span class="font-bold text-slate-400 text-[10px]">区間 ${idx + 1}</span>
+                        <button type="button" class="btn-del-sec text-red-400 hover:text-red-300 text-[10px]">削除</button>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="block text-[9px] text-slate-500">開始駅</label>
+                            <select class="sel-from w-full bg-slate-900 border border-slate-700 rounded px-1.5 py-1 text-[11px] text-slate-200">${fromOptions}</select>
+                        </div>
+                        <div>
+                            <label class="block text-[9px] text-slate-500">終了駅</label>
+                            <select class="sel-to w-full bg-slate-900 border border-slate-700 rounded px-1.5 py-1 text-[11px] text-slate-200">${toOptions}</select>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 pt-1 border-t border-slate-900">
+                        <div>
+                            <label class="block text-[9px] text-slate-500">区間始端</label>
+                            <select class="sel-start-style w-full bg-slate-900 border border-slate-700 rounded px-1.5 py-1 text-[10px] text-slate-200">
+                                <option value="terminal" ${(sec.startStyle || 'terminal') === 'terminal' ? 'selected' : ''}>当駅始発</option>
+                                <option value="through" ${(sec.startStyle || 'terminal') === 'through' ? 'selected' : ''}>直通</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[9px] text-slate-500">区間終端</label>
+                            <select class="sel-end-style w-full bg-slate-900 border border-slate-700 rounded px-1.5 py-1 text-[10px] text-slate-200">
+                                <option value="terminal" ${(sec.endStyle || 'terminal') === 'terminal' ? 'selected' : ''}>当駅終着</option>
+                                <option value="through" ${(sec.endStyle || 'terminal') === 'through' ? 'selected' : ''}>直通</option>
+                            </select>
+                        </div>
+                    </div>
+                `;
+
+                item.querySelector('.sel-from').onchange = (e) => { sec.fromId = e.target.value; };
+                item.querySelector('.sel-to').onchange = (e) => { sec.toId = e.target.value; };
+                item.querySelector('.sel-start-style').onchange = (e) => { sec.startStyle = e.target.value; };
+                item.querySelector('.sel-end-style').onchange = (e) => { sec.endStyle = e.target.value; };
+
+                item.querySelector('.btn-del-sec').onclick = () => {
+                    tempNonOpSections.splice(idx, 1);
+                    renderModalNonOpSections();
+                };
+
+                container.appendChild(item);
+            });
+        }
+
+        document.getElementById('btnAddNonOpSection').onclick = function() {
+            const line = getActiveLine();
+            if (!line) return;
+            const stations = line.points.filter(p => p.type === 'station');
+            if (stations.length < 2) return;
+
+            tempNonOpSections.push({
+                fromId: stations[0].id,
+                toId: stations[stations.length - 1].id,
+                startStyle: 'terminal',
+                endStyle: 'terminal'
+            });
+            renderModalNonOpSections();
+        };
+
+        function renderModalStationsChecklist(srv) {
+            const line = getActiveLine();
+            const container = document.getElementById('serviceStationsChecklist');
+            container.innerHTML = '';
+
+            const stations = line ? line.points.filter(p => p.type === 'station') : [];
+
+            if (stations.length === 0) {
+                container.innerHTML = `<div class="text-[10px] text-slate-500">駅が登録されていません</div>`;
+                return;
+            }
+
+            stations.forEach(st => {
+                const isChecked = srv.stops && srv.stops[st.id] !== undefined ? srv.stops[st.id] : true;
+                const stopType = (srv.stops && srv.stops[st.id + '_type']) || 'stop'; // 'stop' or 'partial'
+
+                const label = document.createElement('div');
+                label.className = 'flex items-center justify-between p-1.5 hover:bg-slate-900 rounded cursor-pointer text-slate-200 select-none';
+
+                label.innerHTML = `
+                    <div class="flex items-center space-x-2">
+                        <input type="checkbox" value="${st.id}" class="chk-station rounded accent-blue-500 bg-slate-900 border-slate-700" ${isChecked ? 'checked' : ''}>
+                        <span class="font-medium text-xs">${st.name || '名称未設定駅'}</span>
+                    </div>
+                    <select class="sel-stop-type bg-slate-900 border border-slate-700 rounded text-[10px] px-1 py-0.5 text-slate-300 ${isChecked ? '' : 'hidden'}">
+                        <option value="stop" ${stopType === 'stop' ? 'selected' : ''}>全列車停車 (○)</option>
+                        <option value="partial" ${stopType === 'partial' ? 'selected' : ''}>一部停車 (△)</option>
+                    </select>
+                `;
+
+                const chk = label.querySelector('.chk-station');
+                const selType = label.querySelector('.sel-stop-type');
+
+                chk.onchange = function() {
+                    if (chk.checked) {
+                        selType.classList.remove('hidden');
+                    } else {
+                        selType.classList.add('hidden');
+                    }
+                };
+
+                container.appendChild(label);
+            });
+        }
+
+        document.getElementById('btnSelectAllStations').onclick = function() {
+            document.querySelectorAll('#serviceStationsChecklist .chk-station').forEach(chk => {
+                chk.checked = true;
+                chk.dispatchEvent(new Event('change'));
+            });
+        };
+
+        document.getElementById('btnClearAllStations').onclick = function() {
+            document.querySelectorAll('#serviceStationsChecklist .chk-station').forEach(chk => {
+                chk.checked = false;
+                chk.dispatchEvent(new Event('change'));
+            });
+        };
+
+        document.getElementById('inputServiceColor').oninput = function(e) {
+            document.getElementById('lblServiceColorHex').textContent = e.target.value;
+        };
+
+        document.getElementById('rangeServiceLineWidth').oninput = function(e) {
+            document.getElementById('lblServiceLineWidth').textContent = `${e.target.value}px`;
+        };
+
+        document.getElementById('btnCloseServiceModal').onclick = function() {
+            document.getElementById('editServiceModal').classList.add('hidden');
+        };
+
+        document.getElementById('btnCancelServiceModal').onclick = function() {
+            document.getElementById('editServiceModal').classList.add('hidden');
+        };
+
+        document.getElementById('btnDeleteServiceType').onclick = function() {
+            const line = getActiveLine();
+            if (!line || !editingServiceTypeId) return;
+
+            showCustomModal("種別の削除確認", "この種別を削除してもよろしいですか？", true, "fa-solid fa-triangle-exclamation text-red-400", (confirmed) => {
+                if (confirmed) {
+                    line.serviceTypes = line.serviceTypes.filter(s => s.id !== editingServiceTypeId);
+                    saveToLocalStorage();
+                    renderDiagramPanel();
+                    document.getElementById('editServiceModal').classList.add('hidden');
+                }
+            });
+        };
+
+        document.getElementById('btnSaveServiceModal').onclick = function() {
+            const line = getActiveLine();
+            if (!line || !editingServiceTypeId) return;
+
+            const srv = line.serviceTypes.find(s => s.id === editingServiceTypeId);
+            if (!srv) return;
+
+            srv.name = document.getElementById('inputServiceName').value.trim() || '種別';
+            srv.color = document.getElementById('inputServiceColor').value;
+            srv.lineWidth = parseInt(document.getElementById('rangeServiceLineWidth').value);
+
+            srv.startStyle = document.getElementById('selectStartStyle').value;
+            srv.endStyle = document.getElementById('selectEndStyle').value;
+            srv.passStyle = document.getElementById('selectPassStyle').value;
+
+            srv.nonOpSections = JSON.parse(JSON.stringify(tempNonOpSections));
+
+            srv.stops = {};
+            document.querySelectorAll('#serviceStationsChecklist > div').forEach(item => {
+                const chk = item.querySelector('.chk-station');
+                const selType = item.querySelector('.sel-stop-type');
+                if (chk) {
+                    srv.stops[chk.value] = chk.checked;
+                    if (selType) {
+                        srv.stops[chk.value + '_type'] = selType.value;
+                    }
+                }
+            });
+
+            saveToLocalStorage();
+            renderDiagramPanel();
+            document.getElementById('editServiceModal').classList.add('hidden');
+        };
+
+        // ---- 種別案内図 プレビュー描画ロジック ----
+        function renderServiceDiagramPreview() {
+            const line = getActiveLine();
+            const container = document.getElementById('serviceDiagramContainer');
+            container.innerHTML = '';
+
+            if (!line) return;
+
+            // serviceTypes が未定義の場合は空配列として扱う
+            const serviceTypes = line.serviceTypes || [];
+
+            const stations = line.points.filter(p => p.type === 'station');
+            if (stations.length === 0) {
+                container.innerHTML = `<div class="text-slate-500 text-xs py-10 text-center">路線に駅がありません</div>`;
+                return;
+            }
+
+            const colWidth = 60;
+            const rowHeight = 44;
+            const headerHeight = 90;
+            const leftMargin = 120;
+
+            const totalWidth = leftMargin + (stations.length * colWidth) + 40;
+            const totalHeight = headerHeight + (serviceTypes.length * rowHeight) + 20;
+
+            const wrapper = document.createElement('div');
+            wrapper.className = 'relative select-none';
+            wrapper.style.width = `${totalWidth}px`;
+            wrapper.style.height = `${totalHeight}px`;
+
+            // 駅名（縦書き）ヘッダー
+            stations.forEach((st, sIdx) => {
+                const x = leftMargin + (sIdx * colWidth) + (colWidth / 2);
+                const stLabel = document.createElement('div');
+                stLabel.className = 'absolute top-0 text-xs font-bold text-slate-300 flex items-end justify-center pb-2 border-b border-slate-800';
+                stLabel.style.left = `${x - 15}px`;
+                stLabel.style.width = '30px';
+                stLabel.style.height = `${headerHeight - 10}px`;
+
+                stLabel.innerHTML = `
+                    <span class="writing-mode-vertical max-h-[70px] truncate">${st.name || '駅'}</span>
+                `;
+                wrapper.appendChild(stLabel);
+            });
+
+            // 各種別行の描画
+            serviceTypes.forEach((srv, rIdx) => {
+                const y = headerHeight + (rIdx * rowHeight) + (rowHeight / 2);
+
+                // 種別名ラベル（左側固定）
+                const nameLabel = document.createElement('div');
+                nameLabel.className = 'absolute left-0 flex items-center justify-end pr-3 font-bold text-xs truncate';
+                nameLabel.style.top = `${y - 12}px`;
+                nameLabel.style.width = `${leftMargin - 10}px`;
+                nameLabel.style.height = '24px';
+                nameLabel.style.color = srv.color;
+                nameLabel.textContent = srv.name;
+                wrapper.appendChild(nameLabel);
+
+                // 運転区間（運行する区間）リストの生成
+                let activeSegments = [];
+                if (srv.nonOpSections && srv.nonOpSections.length > 0) {
+                    srv.nonOpSections.forEach(sec => {
+                        const fIdx = stations.findIndex(s => s.id === sec.fromId);
+                        const tIdx = stations.findIndex(s => s.id === sec.toId);
+                        if (fIdx !== -1 && tIdx !== -1) {
+                            activeSegments.push({
+                                start: Math.min(fIdx, tIdx),
+                                end: Math.max(fIdx, tIdx),
+                                startStyle: sec.startStyle || 'terminal',
+                                endStyle: sec.endStyle || 'terminal'
+                            });
+                        }
+                    });
+                } else {
+                    // 区間指定がない場合は路線全体（最初から最後の駅まで）
+                    activeSegments.push({
+                        start: 0,
+                        end: stations.length - 1,
+                        startStyle: srv.startStyle || 'terminal',
+                        endStyle: srv.endStyle || 'terminal'
+                    });
+                }
+
+                function isIndexInActiveSegment(i) {
+                    if (activeSegments.length === 0) return true;
+                    return activeSegments.some(seg => i >= seg.start && i <= seg.end);
+                }
+
+                // 1. 各運行区間のライン描画
+                activeSegments.forEach(seg => {
+                    let startX = leftMargin + (seg.start * colWidth) + (colWidth / 2);
+                    let endX = leftMargin + (seg.end * colWidth) + (colWidth / 2);
+
+                    if (seg.startStyle === 'through') {
+                        startX -= 22;
+                    }
+                    if (seg.endStyle === 'through') {
+                        endX += 22;
+                    }
+
+                    const lineEl = document.createElement('div');
+                    lineEl.className = 'absolute rounded-full';
+                    lineEl.style.top = `${y - (srv.lineWidth / 2)}px`;
+                    lineEl.style.left = `${startX}px`;
+                    lineEl.style.width = `${Math.max(2, endX - startX)}px`;
+                    lineEl.style.height = `${srv.lineWidth}px`;
+                    lineEl.style.backgroundColor = srv.color;
+                    wrapper.appendChild(lineEl);
+                });
+
+                // 2. 各駅の記号描画
+                stations.forEach((st, sIdx) => {
+                    const x = leftMargin + (sIdx * colWidth) + (colWidth / 2);
+                    const inOp = isIndexInActiveSegment(sIdx);
+                    if (!inOp) return;
+
+                    const isStopped = srv.stops && srv.stops[st.id] === true;
+                    const stopType = (srv.stops && srv.stops[st.id + '_type']) || 'stop';
+
+                    if (isStopped) {
+                        const node = document.createElement('div');
+                        node.className = 'absolute rounded-full flex items-center justify-center z-10';
+                        node.style.top = `${y - 7}px`;
+                        node.style.left = `${x - 7}px`;
+                        node.style.width = '14px';
+                        node.style.height = '14px';
+
+                        if (stopType === 'partial') {
+                            // 一部停車：内側白塗りの三角形 (△)
+                            node.style.background = 'transparent';
+                            node.style.border = 'none';
+                            node.innerHTML = `
+                                <svg width="14" height="14" viewBox="0 0 14 14" style="filter: drop-shadow(0px 1px 2px rgba(0,0,0,0.4));">
+                                    <polygon points="7,1 13,12 1,12" fill="#ffffff" stroke="${srv.color}" stroke-width="2.5" stroke-linejoin="round" />
+                                </svg>`;
+                        } else {
+                            // 全列車停車：白丸（種別色縁）
+                            node.style.backgroundColor = '#ffffff';
+                            node.style.border = `2.5px solid ${srv.color}`;
+                            node.style.boxShadow = '0 1px 3px rgba(0,0,0,0.4)';
+                        }
+                        wrapper.appendChild(node);
+                    } else {
+                        // 通過駅の表示
+                        if (srv.passStyle === 'dot') {
+                            const dot = document.createElement('div');
+                            dot.className = 'absolute rounded-full bg-slate-400 z-10';
+                            dot.style.top = `${y - 2.5}px`;
+                            dot.style.left = `${x - 2.5}px`;
+                            dot.style.width = '5px';
+                            dot.style.height = '5px';
+                            wrapper.appendChild(dot);
+                        } else if (srv.passStyle === 'line') {
+                            const pLine = document.createElement('div');
+                            pLine.className = 'absolute bg-slate-400 z-10';
+                            pLine.style.top = `${y - 6}px`;
+                            pLine.style.left = `${x - 1}px`;
+                            pLine.style.width = '2px';
+                            pLine.style.height = '12px';
+                            wrapper.appendChild(pLine);
+                        }
+                    }
+                });
+            });
+
+            container.appendChild(wrapper);
+        }
+
+        // ---- JSON ファイル保存・読み込み機能 ----
+        function openDataExportModal() {
+            const modal = document.getElementById('dataExportModal');
+            const textarea = document.getElementById('textareaJsonData');
+            textarea.value = JSON.stringify(lines, null, 2);
+            modal.classList.remove('hidden');
+        }
+
+        document.getElementById('btnCloseDataModal').onclick = function() {
+            document.getElementById('dataExportModal').classList.add('hidden');
+        };
+
+        // ファイルに保存 (JSONダウンロード)
+        document.getElementById('btnDownloadJsonFile').onclick = function() {
+            const jsonStr = JSON.stringify(lines, null, 2);
+            const blob = new Blob([jsonStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `railway_data_${new Date().toISOString().slice(0, 10)}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        };
+
+        // ファイルから読み込み (JSONファイル選択)
+        document.getElementById('inputJsonFileInput').onchange = function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                try {
+                    const importedLines = JSON.parse(evt.target.result);
+                    if (Array.isArray(importedLines)) {
+                        lines = importedLines;
+                        activeLineId = lines.length > 0 ? lines[0].id : null;
+                        saveToLocalStorage();
+                        renderMap();
+                        renderDashboard();
+                        if (!document.getElementById('diagramPanel').classList.contains('hidden')) {
+                            renderDiagramPanel();
+                        }
+                        document.getElementById('dataExportModal').classList.add('hidden');
+                        showCustomModal("完了", "ファイルからデータを正常に読み込みました。");
+                    } else {
+                        showCustomModal("エラー", "無効なJSONファイル形式です。", false, "fa-solid fa-triangle-exclamation text-red-400");
+                    }
+                } catch (err) {
+                    showCustomModal("エラー", "JSONファイルの解析に失敗しました。", false, "fa-solid fa-triangle-exclamation text-red-400");
+                }
+            };
+            reader.readAsText(file);
+        };
+
+        // テキストコピー
+        document.getElementById('btnCopyJsonData').onclick = function() {
+            const textarea = document.getElementById('textareaJsonData');
+            textarea.select();
+            document.execCommand('copy');
+            showCustomModal("完了", "クリップボードにコピーしました。");
+        };
+
+        // テキストから読み込み
+        document.getElementById('btnImportJsonData').onclick = function() {
+            const textarea = document.getElementById('textareaJsonData');
+            try {
+                const importedLines = JSON.parse(textarea.value);
+                if (Array.isArray(importedLines)) {
+                    lines = importedLines;
+                    // インポートデータへの serviceTypes 安全補完
+                    lines.forEach(line => {
+                        if (!line.serviceTypes) {
+                            line.serviceTypes = [
+                                {
+                                    id: 'srv_local_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+                                    name: '各駅停車',
+                                    color: line.color || '#3b82f6',
+                                    lineWidth: 4,
+                                    startStyle: 'terminal',
+                                    endStyle: 'terminal',
+                                    passStyle: 'none',
+                                    nonOpSections: [],
+                                    stops: {}
+                                }
+                            ];
+                        }
+                    });
+                    activeLineId = lines.length > 0 ? lines[0].id : null;
+                    saveToLocalStorage();
+                    renderMap();
+                    renderDashboard();
+                    if (!document.getElementById('diagramPanel').classList.contains('hidden')) {
+                        renderDiagramPanel();
+                    }
+                    document.getElementById('dataExportModal').classList.add('hidden');
+                    showCustomModal("完了", "データを正常にインポートしました。");
+                } else {
+                    showCustomModal("エラー", "無効なJSON形式です。", false, "fa-solid fa-triangle-exclamation text-red-400");
+                }
+            } catch (err) {
+                showCustomModal("エラー", "JSONの解析に失敗しました。", false, "fa-solid fa-triangle-exclamation text-red-400");
+            }
+        };
+
+        // ---- 初期起動処理 ----
+        loadFromLocalStorage();
+        if (lines.length === 0) {
+            createDefaultLine();
+        } else {
+            renderMap();
+            renderDashboard();
+        }
+    };
+</script>
+</body>
+</html>
