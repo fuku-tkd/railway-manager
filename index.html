@@ -1869,13 +1869,36 @@
                 return;
             }
 
+            // 同名駅を持つ他路線の乗換案内情報を事前算出
+            const transferInfoMap = {};
+            stations.forEach(st => {
+                const stName = (st.name || '').trim();
+                if (!stName) return;
+
+                // 自分以外の路線で、同名の駅を持っている路線を検索
+                const transferLines = lines.filter(l => 
+                    l.id !== line.id && 
+                    l.points && 
+                    l.points.some(p => p.type === 'station' && (p.name || '').trim() === stName)
+                );
+
+                if (transferLines.length > 0) {
+                    transferInfoMap[st.id] = transferLines;
+                }
+            });
+
+            // 乗換案内を表示するための高さを下部に確保（複数路線がある場合は縦方向に拡張）
+            const maxTransferCount = Math.max(0, ...stations.map(st => (transferInfoMap[st.id] || []).length));
+            const transferFooterHeight = maxTransferCount > 0 ? (maxTransferCount * 45 + 30) : 0;
+
             const colWidth = 60;
             const rowHeight = 44;
             const headerHeight = 90;
             const leftMargin = 120;
 
             const totalWidth = leftMargin + (stations.length * colWidth) + 40;
-            const totalHeight = headerHeight + (serviceTypes.length * rowHeight) + 20;
+            const diagramHeight = headerHeight + (serviceTypes.length * rowHeight) + 20;
+            const totalHeight = diagramHeight + transferFooterHeight;
 
             const wrapper = document.createElement('div');
             wrapper.className = 'relative select-none';
@@ -1891,7 +1914,7 @@
                 stLabel.style.height = `${headerHeight - 10}px`;
 
                 stLabel.innerHTML = `
-                    <span class="writing-mode-vertical max-h-[70px] truncate">${st.name || '駅'}</span>
+                    <span class="writing-mode-vertical max-h-[70px] leading-tight break-all">${st.name || '駅'}</span>
                 `;
                 wrapper.appendChild(stLabel);
             });
@@ -2008,6 +2031,43 @@
                 });
             });
 
+            // 3. 全種別行の下部に乗換案内を表示
+            if (maxTransferCount > 0) {
+                // 左端ラベル「乗換路線」
+                const transferLabel = document.createElement('div');
+                transferLabel.className = 'absolute left-0 flex items-center justify-end pr-3 font-bold text-[11px] text-slate-400 border-t border-slate-800/80 pt-2';
+                transferLabel.style.top = `${diagramHeight}px`;
+                transferLabel.style.width = `${leftMargin - 10}px`;
+                transferLabel.textContent = '乗換路線';
+                wrapper.appendChild(transferLabel);
+
+                stations.forEach((st, sIdx) => {
+                    const x = leftMargin + (sIdx * colWidth) + (colWidth / 2);
+                    const transferLines = transferInfoMap[st.id] || [];
+                    if (transferLines.length === 0) return;
+
+                    const container = document.createElement('div');
+                    container.className = 'absolute flex flex-col items-center pt-2 space-y-1.5 border-t border-slate-800/80';
+                    container.style.top = `${diagramHeight}px`;
+                    container.style.left = `${x - (colWidth / 2) + 4}px`;
+                    container.style.width = `${colWidth - 8}px`;
+
+                    transferLines.forEach(tLine => {
+                        const item = document.createElement('div');
+                        item.className = 'relative flex flex-col items-center justify-center w-full bg-slate-950 border border-slate-800/90 rounded overflow-hidden pt-2 pb-1 shadow-sm shrink-0 min-h-[36px]';
+                        item.title = `乗換: ${tLine.name}`;
+
+                        item.innerHTML = `
+                            <div class="absolute top-0 left-0 right-0 h-[3px]" style="background-color: ${tLine.color};"></div>
+                            <span class="writing-mode-vertical text-[10px] font-semibold text-slate-300 leading-tight whitespace-normal break-all">${tLine.name}</span>
+                        `;
+                        container.appendChild(item);
+                    });
+
+                    wrapper.appendChild(container);
+                });
+            }
+
             container.appendChild(wrapper);
         }
 
@@ -2023,6 +2083,7 @@
             document.getElementById('dataExportModal').classList.add('hidden');
         };
 
+        // ファイルに保存 (JSONダウンロード)
         document.getElementById('btnDownloadJsonFile').onclick = function() {
             const jsonStr = JSON.stringify(lines, null, 2);
             const blob = new Blob([jsonStr], { type: 'application/json' });
@@ -2036,6 +2097,7 @@
             URL.revokeObjectURL(url);
         };
 
+        // ファイルから読み込み (JSONファイル選択)
         document.getElementById('inputJsonFileInput').onchange = function(e) {
             const file = e.target.files[0];
             if (!file) return;
@@ -2065,6 +2127,7 @@
             reader.readAsText(file);
         };
 
+        // テキストコピー
         document.getElementById('btnCopyJsonData').onclick = function() {
             const textarea = document.getElementById('textareaJsonData');
             textarea.select();
@@ -2072,6 +2135,7 @@
             showCustomModal("完了", "クリップボードにコピーしました。");
         };
 
+        // テキストから読み込み
         document.getElementById('btnImportJsonData').onclick = function() {
             const textarea = document.getElementById('textareaJsonData');
             try {
